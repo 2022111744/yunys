@@ -1,0 +1,109 @@
+pipeline{ 
+    agent any 
+    parameters { 
+        booleanParam(name: 'Checkout', defaultValue: true, description: '拉取代码') 
+        booleanParam(name: 'Build', defaultValue: true, description: '生成jar') 
+        booleanParam(name: 'BuildImages', defaultValue: true, description: '生成镜像') 
+        booleanParam(name: 'Pushimage', defaultValue: true, description: '推送镜像') 
+        booleanParam(name: 'Deploy', defaultValue: true, description: '部署服务') 
+    } 
+    environment { 
+        docker_registry = 'registry.cn-hangzhou.aliyuncs.com' 
+        service_list = 'eureka-service gateway-service product-service product-client' 
+ 
+        //version = "${env.BUILD_NUMBER}" 
+        //如果每次根据版本生成镜像，则将下面的去掉，用上面那个 
+        version = "latest" 
+    } 
+    stages{ 
+        stage('Checkout'){ 
+            when { 
+                 expression { params.Checkout == true } 
+
+            }             
+            steps{ 
+                git credentialsId: '247b5c50-6d38-4f75-aaef-a5ab2db8dedf', url: 
+'https://gitee.com/frankgy/microservice-demo-n.git' 
+                 
+            } 
+        } 
+        stage('Build'){ 
+            when { 
+                 expression { params.Build == true } 
+            }              
+            steps{ 
+                 sh 'mvn clean package' 
+            } 
+        } 
+        stage('BuildImages') { 
+            when { 
+                 expression { params.BuildImages == true } 
+            }   
+            steps { 
+                script { 
+  
+                    def work_dir = pwd() 
+                    for (service in service_list.split()) { 
+                        dir("$work_dir/$service") { 
+ 
+                            def image_name = "${docker_registry}/my
+stock/${service}:${version}" 
+                            echo "${image_name}" 
+                            sh "nerdctl build -f Dockerfile -t ${image_name} ." 
+ 
+                        } 
+                    } 
+ 
+                } 
+            } 
+        } 
+ 
+ 
+        stage("Pushimage"){ 
+             when { 
+                expression { params.Pushimage == true } 
+            } 
+            steps{ 
+             
+                withCredentials([usernamePassword(credentialsId: '898423f1-9aa1-4450
+b8e0-d61f6f204b1e', passwordVariable: 'ALIYUN_PASSWORD', usernameVariable: 
+'ALIYUN_USERNAME')]) { 
+                    sh "nerdctl login --username=$ALIYUN_USERNAME -
+password=$ALIYUN_PASSWORD registry.cn-hangzhou.aliyuncs.com" 
+                   
+                    sh "nerdctl push registry.cn-hangzhou.aliyuncs.com/my
+stock/gateway-service:${version}" 
+                    sh "nerdctl push registry.cn-hangzhou.aliyuncs.com/my-stock/eureka
+service:${version}"  
+                    sh "nerdctl push registry.cn-hangzhou.aliyuncs.com/my
+stock/product-service:${version}"                          
+                    sh "nerdctl push registry.cn-hangzhou.aliyuncs.com/my
+stock/product-client:${version}"                  
+                }   
+            } 
+        } 
+       stage("Deploy"){ 
+         when { 
+                expression { params.Deploy == true } 
+          } 
+          steps{ 
+            script{ 
+              withCredentials([certificate(aliasVariable: '', credentialsId: '59f161bf-6325
+4a2a-a2f6-38c39275a406', keystoreVariable: 'CERTIFICATE_KEYSTORE', passwordVariable: 
+'CERTIFICATE_PASSWORD')]) { 
+                  def work_dir = pwd() 
+                  sh 'echo $work_dir' 
+                  dir("$work_dir/k8s"){ 
+                        sh 'ls' 
+                        sh 'kubectl apply -f gateway-service.yaml' 
+                        sh 'kubectl apply -f eureka-service.yaml' 
+                        sh 'kubectl apply -f product-service.yaml' 
+                        sh 'kubectl apply -f product-client.yaml'                         
+                  } 
+ 
+              } 
+            }
+          } 
+       } 
+    } 
+} 
